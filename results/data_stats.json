@@ -1,0 +1,45 @@
+{
+  "raw": {
+    "train": {
+      "rows": 11089,
+      "label_0": 6303,
+      "label_1": 4786
+    },
+    "validation": {
+      "rows": 2101,
+      "label_0": 1050,
+      "label_1": 1051
+    },
+    "test": {
+      "rows": 2101,
+      "label_0": 1050,
+      "label_1": 1051
+    }
+  },
+  "clean": {
+    "train": {
+      "rows": 11045,
+      "label_0": 6264,
+      "label_1": 4781
+    },
+    "validation": {
+      "rows": 2101,
+      "label_0": 1050,
+      "label_1": 1051
+    },
+    "test_clean": {
+      "rows": 1985,
+      "label_0": 1043,
+      "label_1": 942
+    }
+  },
+  "removed_from_train": {
+    "duplicates": 39,
+    "label_conflicts": 1,
+    "overlap_with_validation_or_test": 4
+  },
+  "removed_from_test": 116,
+  "conflicting_texts": [
+    "how do you handle requests that could be interpreted multiple ways?"
+  ]
+}
