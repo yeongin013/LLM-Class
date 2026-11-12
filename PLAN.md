@@ -55,12 +55,11 @@ n²항의 비중은 n/(6d+n)이다. n=14이면 0.3%, n=128이면 2.7%, n=512이�
   - 지연 시간: batch 1에서 샘플당 median과 p95. warm-up 20회 후 측정하고, GPU는 측정 전에 동기화한다(`torch.cuda.synchronize` / `torch.mps.synchronize`)
   - 처리량: batch 32에서 초당 샘플 수
   - 토큰화 시간은 따로 보고한다
-- 장비: Mac M4 Pro(MPS, CPU)에서 개발하고, 4090(CUDA)은 seed 반복과 지연 시간 교차 측정에 쓴다. 장비별 결과는 섞지 않고 따로 표로 만든다.
+- 장비: Mac M4 Pro(MPS, CPU)에서 개발한다. 장비별 결과는 섞지 않고 따로 표로 만든다.
 
 ### 단계 0. 환경
 - `uv venv --python 3.12` (시스템 Python 3.14는 쓰지 않는다)
 - 패키지: `torch`, `transformers`, `datasets`, `scikit-learn`, `matplotlib`
-- 4090 PC도 같은 패키지 목록으로 맞춘다.
 
 ### 단계 1. 데이터 정리 → `data/clean/`
 1. train: 중복 38행 제거, 라벨 충돌 1건 제거, validation과 겹치는 4문장 제거
@@ -148,7 +147,7 @@ LLM_Class/
 
 | 위험 | 대응 |
 |---|---|
-| MPS 지연 시간 측정이 불안정함 | 동기화 후 반복 측정하고 median을 쓴다. CPU 단일 스레드와 4090 결과를 함께 보고한다 |
+| MPS 지연 시간 측정이 불안정함 | 동기화 후 반복 측정하고 median을 쓴다. CPU 단일 스레드 결과를 함께 보고한다 |
 | batch 1에서는 GPU 실행 준비 오버헤드가 커서 FLOPs 감소가 시간 감소로 이어지지 않을 수 있음 | FLOPs와 실제 시간을 둘 다 보고하고, 차이의 원인을 분석에 넣는다 |
 | validation이 작아(2,101행) F1 차이가 우연일 수 있음 | seed 3개를 반복하고 편차를 함께 보고한다 |
 | 라벨 노이즈 | 오분류 분석에서 사람이 검토한 의심 라벨 목록을 따로 정리한다 |
