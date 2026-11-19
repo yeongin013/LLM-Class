@@ -1,0 +1,153 @@
+{
+  "fixed_len": 128,
+  "models": {
+    "bert": {
+      "name": "bert-base-uncased",
+      "layers": 12,
+      "d_model": 768,
+      "params_M": 109.483778,
+      "theory_vs_measured": {
+        "10": {
+          "measured_gflops": 1.70356224,
+          "theory_gflops": 1.70356224,
+          "ratio": 1.0
+        },
+        "110": {
+          "measured_gflops": 19.13286144,
+          "theory_gflops": 19.13286144,
+          "ratio": 1.0
+        },
+        "128": {
+          "measured_gflops": 22.348434432,
+          "theory_gflops": 22.348434432,
+          "ratio": 1.0
+        },
+        "512": {
+          "measured_gflops": 96.63794688,
+          "theory_gflops": 96.63794688,
+          "ratio": 1.0
+        }
+      },
+      "worst_rel_error_on_real_lengths": 0.0,
+      "component_share": {
+        "10.112342569269522": {
+          "proj": 0.33260342886016764,
+          "ffn": 0.6652068577203353,
+          "attn_n2": 0.0021897134194971877
+        },
+        "29": {
+          "proj": 0.3312486521457839,
+          "ffn": 0.6624973042915678,
+          "attn_n2": 0.006254043562648264
+        },
+        "128": {
+          "proj": 0.32432432432432434,
+          "ffn": 0.6486486486486487,
+          "attn_n2": 0.02702702702702703
+        },
+        "512": {
+          "proj": 0.3,
+          "ffn": 0.6,
+          "attn_n2": 0.1
+        }
+      },
+      "splits": {
+        "train": {
+          "mean_tokens": 14.11869624264373,
+          "p95_tokens": 29,
+          "max_tokens": 110,
+          "pad_fraction_at_fixed": 0.8896976856043458,
+          "flops_ratio_fixed_over_actual": 9.275169429623883
+        },
+        "validation": {
+          "mean_tokens": 10.974297953355546,
+          "p95_tokens": 18,
+          "max_tokens": 40,
+          "pad_fraction_at_fixed": 0.9142632972394098,
+          "flops_ratio_fixed_over_actual": 11.948902887177232
+        },
+        "test_clean": {
+          "mean_tokens": 10.112342569269522,
+          "p95_tokens": 16,
+          "max_tokens": 36,
+          "pad_fraction_at_fixed": 0.9209973236775819,
+          "flops_ratio_fixed_over_actual": 12.969229238664129
+        }
+      }
+    },
+    "distilbert": {
+      "name": "distilbert-base-uncased",
+      "layers": 6,
+      "d_model": 768,
+      "params_M": 66.95501,
+      "theory_vs_measured": {
+        "10": {
+          "measured_gflops": 0.85237248,
+          "theory_gflops": 0.85237248,
+          "ratio": 1.0
+        },
+        "110": {
+          "measured_gflops": 9.56702208,
+          "theory_gflops": 9.56702208,
+          "ratio": 1.0
+        },
+        "128": {
+          "measured_gflops": 11.174808576,
+          "theory_gflops": 11.174808576,
+          "ratio": 1.0
+        },
+        "512": {
+          "measured_gflops": 48.3195648,
+          "theory_gflops": 48.3195648,
+          "ratio": 1.0
+        }
+      },
+      "worst_rel_error_on_real_lengths": 0.0,
+      "component_share": {
+        "10.112342569269522": {
+          "proj": 0.33260342886016764,
+          "ffn": 0.6652068577203353,
+          "attn_n2": 0.0021897134194971877
+        },
+        "29": {
+          "proj": 0.3312486521457839,
+          "ffn": 0.6624973042915678,
+          "attn_n2": 0.006254043562648264
+        },
+        "128": {
+          "proj": 0.32432432432432434,
+          "ffn": 0.6486486486486487,
+          "attn_n2": 0.02702702702702703
+        },
+        "512": {
+          "proj": 0.3,
+          "ffn": 0.6,
+          "attn_n2": 0.1
+        }
+      },
+      "splits": {
+        "train": {
+          "mean_tokens": 14.11869624264373,
+          "p95_tokens": 29,
+          "max_tokens": 110,
+          "pad_fraction_at_fixed": 0.8896976856043458,
+          "flops_ratio_fixed_over_actual": 9.271109481756902
+        },
+        "validation": {
+          "mean_tokens": 10.974297953355546,
+          "p95_tokens": 18,
+          "max_tokens": 40,
+          "pad_fraction_at_fixed": 0.9142632972394098,
+          "flops_ratio_fixed_over_actual": 11.941983638675673
+        },
+        "test_clean": {
+          "mean_tokens": 10.112342569269522,
+          "p95_tokens": 16,
+          "max_tokens": 36,
+          "pad_fraction_at_fixed": 0.9209973236775819,
+          "flops_ratio_fixed_over_actual": 12.96101972917299
+        }
+      }
+    }
+  }
+}

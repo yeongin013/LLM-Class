@@ -44,6 +44,21 @@ n²항의 비중은 n/(6d+n)이다. n=14이면 0.3%, n=128이면 2.7%, n=512이�
 
 각 기법의 이론 감소율을 먼저 계산하고, `torch.utils.flop_counter.FlopCounterMode`로 측정한 FLOPs와 대조한다.
 
+**결과 (2026-11-19, `src/bench.py` → `results/complexity.json`, `results/latency_pilot.json`, `results/flops_vs_n.png`):**
+- 이론식 `2·[L(12nd² + 2n²d) + d² + 2d]`는 BERT-base와 DistilBERT 모두 validation·`test_clean`에 나오는 모든 길이에서 `FlopCounterMode` 측정값과 정확히 일치했다 (오차 0).
+- 128 고정 padding 대비 실제 길이로 처리하면 FLOPs가 validation에서 11.9배, `test_clean`에서 13.0배 줄어든다 (BERT-base 기준, DistilBERT도 같다).
+- 그러나 batch 1 지연 시간(무작위 가중치, validation 200문장, median)은 FLOPs만큼 줄지 않았다.
+
+| 모델 | 장치 | 128 고정 | 실제 길이 | 단축 배수 |
+|---|---|---|---|---|
+| BERT-base | MPS | 9.85 ms | 6.82 ms | 1.44배 |
+| BERT-base | CPU 1스레드 | 24.97 ms | 10.17 ms | 2.46배 |
+| DistilBERT | MPS | 5.09 ms | 3.51 ms | 1.45배 |
+| DistilBERT | CPU 1스레드 | 12.51 ms | 5.18 ms | 2.41배 |
+
+- 해석: 입력이 짧으면 연산 자체보다 연산마다 붙는 고정 비용(커널 실행 준비, Python 호출)이 지연 시간을 지배한다. DistilBERT가 BERT의 약 절반 시간인 것으로 보아, 이 고정 비용은 층 수에 비례한다.
+- 이후 단계에 대한 가설: batch 1에서는 n을 줄이는 기법(T3 token pruning)보다 L을 줄이는 기법(T2 early exit)이 실제 시간을 더 많이 줄일 것이다.
+
 ## 4. 실험 설계
 
 ### 공통 규칙
@@ -62,7 +77,7 @@ n²항의 비중은 n/(6d+n)이다. n=14이면 0.3%, n=128이면 2.7%, n=512이�
 - 패키지: `torch`, `transformers`, `datasets`, `scikit-learn`, `matplotlib`
 
 ### 단계 1. 데이터 정리 → `data/clean/`
-1. train: 중복 38행 제거, 라벨 충돌 1건 제거, validation과 겹치는 4문장 제거
+1. train: 중복 39행 제거, 라벨 충돌 1건 제거, validation과 겹치는 4문장 제거
 2. test: validation과 겹치는 116문장을 뺀 `test_clean`(약 1,985행)을 만든다. 원본 test 결과도 참고용으로 함께 보고한다.
 3. 정리 전후 행 수와 라벨 비율을 기록한다.
 
@@ -71,11 +86,36 @@ n²항의 비중은 n/(6d+n)이다. n=14이면 0.3%, n=128이면 2.7%, n=512이�
 - test 2,101 → `test_clean` 1,985. 빠진 116문장 중 109개가 공격이다. 그래서 `test_clean`의 라벨 비율이 1,043(정상) : 942(공격)로 50/50이 아니다. accuracy보다 macro F1과 클래스별 지표를 중심으로 본다.
 - validation은 그대로다 (2,101행, 50/50).
 
-### 단계 2. 기준 모델 (B0)
+### 단계 2. TF-IDF 재측정과 기준 모델 (B0)
 - `bert-base-uncased` + `[CLS]` Dense(768×2), Ch7 §4 Single Text Classification 구조
 - 시작값(관례): lr 2e-5, batch 32, 3 epoch, warm-up 10%, validation F1 기준 조기 종료
 - **비교 기준은 `max_length=128` 고정 padding 추론이다.** 이것을 1배로 놓고 아래 기법을 비교한다.
 - TF-IDF 기준선도 정리된 데이터로 다시 측정한다.
+- **비교 모델 DistilBERT** (`distilbert-base-uncased`, 6층, 67M): 같은 설정으로 fine-tuning한다(seed 3개). "강의 기법으로 BERT를 줄인 것"과 "처음부터 층을 반으로 줄여 증류한 공개 모델"을 비교하기 위해서다. 특히 T2 early exit와 직접 비교된다. 2026-11-19 추가.
+
+**TF-IDF 재측정 결과 (2026-11-19, `src/tfidf.py` → `results/tfidf.json`, `results/tfidf_probs.csv`):**
+- C는 validation macro F1 기준으로 5를 골랐다 (C=2와 소수점 다섯째 자리까지 같음).
+
+| split | macro F1 | 공격 recall | 정상 FPR | ROC-AUC |
+|---|---|---|---|---|
+| validation | 0.975 | 0.960 | 0.010 | 0.997 |
+| `test_clean` | 0.951 | 0.910 | 0.011 | 0.988 |
+
+- CPU batch 1 지연 시간은 median 0.40 ms다. BERT-base(MPS, 실제 길이)의 6.82 ms보다 약 17배 빠르다. cascade의 1단계로 쓸 근거가 된다.
+- validation과 `test_clean`의 차이(공격 recall 0.960 → 0.910)는 validation에서 하이퍼파라미터를 고른 효과와 split 간 분포 차이가 섞인 결과다.
+
+**B0 학습 결과 (2026-11-19, `src/model.py` → `results/b0/`, MPS, seed 13·42·2026, validation 기준 평균 ± 표준편차):**
+
+| 모델 | macro F1 | 공격 recall | 정상 FPR | ROC-AUC | 고른 epoch | 학습 시간/회 |
+|---|---|---|---|---|---|---|
+| TF-IDF (참고) | 0.975 | 0.960 | 0.010 | 0.997 | — | 수 초 |
+| BERT-base | 0.979 ± 0.005 | 0.968 ± 0.004 | 0.010 ± 0.005 | 0.998 ± 0.001 | 1, 3, 1 | 3.9분 |
+| DistilBERT | 0.980 ± 0.003 | 0.965 ± 0.005 | 0.004 ± 0.002 | 0.999 ± 0.000 | 1, 1, 1 | 2.1분 |
+
+- 확인 지점("validation F1이 TF-IDF보다 높음")은 평균 기준으로 통과했다. 다만 차이(0.004~0.005)가 seed 간 표준편차와 비슷해서 확실한 우위라고 보기는 어렵다.
+- DistilBERT가 BERT-base와 같거나 약간 낫다 (차이는 편차 범위 안). 이 데이터는 6층으로도 충분하다는 신호이며, T2 early exit의 근거가 된다.
+- 6회 중 5회가 epoch 1에서 가장 좋았고, epoch 2에서 대부분 떨어졌다. 짧은 단문 데이터라 1 epoch면 거의 수렴하는 것으로 보인다. epoch마다 validation으로 최선을 고르므로 validation 점수에는 선택에 따른 낙관 편향이 약간 있다.
+- ROC-AUC(0.998~0.999)에 비해 F1이 낮다. threshold 0.5가 최적이 아닐 수 있으므로 단계 5에서 validation으로 threshold를 정한다.
 
 ### 단계 3. 기법 적용 (각각 단독 효과 측정 → 누적 효과 측정)
 
@@ -125,6 +165,7 @@ LLM_Class/
     model.py          B0 학습, exit head, token pruning, GQA 변환
     bench.py          FLOPs, 지연 시간, 처리량 측정
   results/            실험별 JSON과 그림
+  checkpoints/        학습된 모델 (git 제외)
   report.md           최종 보고서
 ```
 
@@ -132,16 +173,17 @@ LLM_Class/
 
 ## 6. 진행 순서와 확인 지점
 
-| 순서 | 작업 | 확인 지점 (통과해야 다음 단계로) |
-|---|---|---|
-| 1 | 환경, 데이터 정리 | 정리 후 행 수 기록, 중복 0건 확인 |
-| 2 | 복잡도 분석, TF-IDF 재측정 | 이론 FLOPs와 측정 FLOPs의 차이가 10% 이내 |
-| 3 | B0 학습 | validation F1이 TF-IDF보다 높음 |
-| 4 | T1 | 정확도가 B0와 동일 (구현 검증) |
-| 5 | T2 probing → early exit | 층별 정확도 곡선 |
-| 6 | T3, T4 | g=12 출력이 B0와 일치 (T4 구현 검증) |
-| 7 | Cascade | BERT로 보내는 비율-F1 곡선 |
-| 8 | 통합, 최종 평가, 보고서 | 성공 기준 달성 여부를 그대로 보고 |
+단계 번호는 4장 실험 설계의 번호와 같다.
+
+| 단계 | 작업 | 확인 지점 (통과해야 다음 단계로) | 상태 |
+|---|---|---|---|
+| 0·1 | 환경, 데이터 정리 | 정리 후 행 수 기록, 중복 0건 확인 | 완료 (2026-11-11) |
+| 2 | 복잡도 분석(3장), TF-IDF 재측정, B0 학습 | 이론 FLOPs와 측정 FLOPs의 차이가 10% 이내 / B0 validation F1이 TF-IDF보다 높음 | 완료 (2026-11-19) |
+| 3-T1 | 동적 padding | 정확도가 B0와 동일 (구현 검증) | |
+| 3-T2 | probing → early exit | 층별 정확도 곡선 | |
+| 3-T3·T4 | token pruning, GQA 변환 | g=12 출력이 B0와 일치 (T4 구현 검증) | |
+| 4 | Cascade | BERT로 보내는 비율-F1 곡선 | |
+| 5 | 통합, 최종 평가, 보고서 | 성공 기준 달성 여부를 그대로 보고 | |
 
 ## 7. 위험 요소와 대응
 

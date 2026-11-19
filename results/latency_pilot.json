@@ -1,0 +1,61 @@
+{
+  "note": "random-init weights; latency does not depend on weight values",
+  "models": {
+    "bert": {
+      "mps": {
+        "fixed_128": {
+          "median_ms": 9.845771011896431,
+          "p95_ms": 10.528750019147992,
+          "calls": 200
+        },
+        "actual_len": {
+          "median_ms": 6.820187496487051,
+          "p95_ms": 8.170415996573865,
+          "calls": 200
+        },
+        "speedup": 1.4436217504236946
+      },
+      "cpu_1thread": {
+        "fixed_128": {
+          "median_ms": 24.973542022053152,
+          "p95_ms": 25.719915982335806,
+          "calls": 200
+        },
+        "actual_len": {
+          "median_ms": 10.170062014367431,
+          "p95_ms": 11.199124972335994,
+          "calls": 200
+        },
+        "speedup": 2.4555938780680564
+      }
+    },
+    "distilbert": {
+      "mps": {
+        "fixed_128": {
+          "median_ms": 5.0901874783448875,
+          "p95_ms": 5.533166928216815,
+          "calls": 200
+        },
+        "actual_len": {
+          "median_ms": 3.5136874648742378,
+          "p95_ms": 4.136666073463857,
+          "calls": 200
+        },
+        "speedup": 1.4486739441770686
+      },
+      "cpu_1thread": {
+        "fixed_128": {
+          "median_ms": 12.512458022683859,
+          "p95_ms": 13.015666045248508,
+          "calls": 200
+        },
+        "actual_len": {
+          "median_ms": 5.182749999221414,
+          "p95_ms": 5.805709050036967,
+          "calls": 200
+        },
+        "speedup": 2.4142507403528164
+      }
+    }
+  }
+}

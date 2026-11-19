@@ -3,3 +3,5 @@ __pycache__/
 .DS_Store
 # Lecture PDFs and notes: course material, not redistributed
 강의자료/
+.claude/worktrees/
+checkpoints/
