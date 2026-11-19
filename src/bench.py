@@ -1,7 +1,9 @@
 """Stage 2: complexity analysis, plus shared measurement helpers reused by later stages.
 
-Run: python src/bench.py
-Writes results/complexity.json, results/latency_pilot.json, results/flops_vs_n.png.
+Run: python src/bench.py            complexity analysis (stage 2)
+     python src/bench.py padding    T1 dynamic padding on trained B0 (stage 3-T1)
+Writes results/complexity.json, results/latency_pilot.json, results/flops_vs_n.png,
+       results/t1_padding.json.
 
 Helpers:
   theory_flops(n, L, d)   FLOPs of one forward pass (matmuls only), see PLAN.md section 3
@@ -64,7 +66,8 @@ def latency(fn, inputs, device, warmup=20):
         sync(device)
         times.append((time.perf_counter() - t) * 1000)
     times.sort()
-    return {"median_ms": statistics.median(times), "p95_ms": times[int(0.95 * (len(times) - 1))], "calls": len(times)}
+    return {"median_ms": statistics.median(times), "mean_ms": statistics.mean(times),
+            "p95_ms": times[int(0.95 * (len(times) - 1))], "calls": len(times)}
 
 
 def evaluate(y, prob, threshold=0.5):
@@ -206,5 +209,99 @@ def plot(out, lengths):
     fig.savefig(RESULTS / "flops_vs_n.png", dpi=150)
 
 
+def padding_t1(seeds=(13, 42, 2026), latency_seed=13, n_batch1=500, repeats=3):
+    """T1: same trained weights, three padding modes. Checks equal predictions, then measures cost."""
+    import csv
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+    with open(CLEAN / "validation.csv", newline="") as f:
+        rows = list(csv.DictReader(f))
+    texts, y = [r["text"] for r in rows], [int(r["label"]) for r in rows]
+    B = 32
+
+    def batches(tok, mode):
+        """Yield (row indices, encoded batch). fixed: pad to 128; dynamic: pad to batch max; bucketed: sort by length first."""
+        order = list(range(len(texts)))
+        if mode == "bucketed":
+            lens = [len(ids) for ids in tok(texts)["input_ids"]]
+            order.sort(key=lambda i: lens[i])
+        kw = {"padding": "max_length", "max_length": FIXED_LEN} if mode == "fixed" else {"padding": "longest"}
+        for i in range(0, len(order), B):
+            idx = order[i:i + B]
+            yield idx, tok([texts[j] for j in idx], return_tensors="pt", **kw)
+
+    def run_probs(model, tok, mode, device):
+        probs = [0.0] * len(texts)
+        with torch.inference_mode():
+            for idx, enc in batches(tok, mode):
+                p = torch.softmax(model(**{k: v.to(device) for k, v in enc.items()}).logits.float(), -1)[:, 1]
+                for j, v in zip(idx, p.tolist()):
+                    probs[j] = v
+        return probs
+
+    out = {"equivalence": {}, "batch1_latency": {}, "batch32_throughput": {}, "tokenize_ms_per_sentence": {}}
+    modes = ["fixed", "dynamic", "bucketed"]
+    for key in MODELS:
+        for seed in seeds:
+            path = ROOT / "checkpoints" / f"{key}_s{seed}"
+            tok = AutoTokenizer.from_pretrained(path)
+            model = AutoModelForSequenceClassification.from_pretrained(path).to("mps").eval()
+            probs = {m: run_probs(model, tok, m, "mps") for m in modes}
+            ref = probs["fixed"]
+            out["equivalence"][f"{key}_s{seed}"] = {
+                m: {"max_abs_prob_diff": max(abs(a - b) for a, b in zip(ref, probs[m])),
+                    "pred_disagreements": sum((a >= 0.5) != (b >= 0.5) for a, b in zip(ref, probs[m])),
+                    "macro_f1": evaluate(y, probs[m])["macro_f1"]} for m in modes}
+
+            if seed != latency_seed:
+                continue
+            # Cost does not depend on weights, so one seed per model is enough.
+            sample = texts[:n_batch1]
+            fixed1 = [tok(t, padding="max_length", max_length=FIXED_LEN, return_tensors="pt") for t in sample]
+            actual1 = [tok(t, return_tensors="pt") for t in sample]
+            out["tokenize_ms_per_sentence"][key] = latency(lambda t: tok(t, return_tensors="pt"), sample, "cpu")
+            out["batch1_latency"][key] = {}
+            out["batch32_throughput"][key] = {}
+            for device in ["mps", "cpu"]:
+                threads = torch.get_num_threads()
+                if device == "cpu":
+                    torch.set_num_threads(1)
+                m = model.to(device)
+
+                def fwd(enc, m=m, device=device):
+                    with torch.inference_mode():
+                        m(**{k: v.to(device) for k, v in enc.items()})
+
+                dev_name = device if device != "cpu" else "cpu_1thread"
+                res = {"fixed_128": latency(fwd, fixed1, device), "actual_len": latency(fwd, actual1, device)}
+                res["speedup"] = res["fixed_128"]["median_ms"] / res["actual_len"]["median_ms"]
+                out["batch1_latency"][key][dev_name] = res
+
+                # Throughput over all of validation; pre-tokenized so only the model is timed.
+                tput = {}
+                for mode in modes:
+                    encs = [enc for _, enc in batches(tok, mode)]
+                    fwd(encs[0])
+                    times = []
+                    for _ in range(repeats):
+                        sync(device)
+                        t = time.perf_counter()
+                        for enc in encs:
+                            fwd(enc)
+                        sync(device)
+                        times.append(time.perf_counter() - t)
+                    tput[mode] = {"sentences_per_sec": len(texts) / statistics.median(times)}
+                for mode in modes:
+                    tput[mode]["speedup_vs_fixed"] = tput[mode]["sentences_per_sec"] / tput["fixed"]["sentences_per_sec"]
+                out["batch32_throughput"][key][dev_name] = tput
+                torch.set_num_threads(threads)
+            model.to("mps")
+        print(key, "done")
+
+    (RESULTS / "t1_padding.json").write_text(json.dumps(out, indent=2))
+    print(json.dumps(out, indent=2))
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+    padding_t1() if sys.argv[1:] == ["padding"] else main()

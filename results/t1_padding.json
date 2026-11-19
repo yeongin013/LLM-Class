@@ -1,0 +1,238 @@
+{
+  "equivalence": {
+    "bert_s13": {
+      "fixed": {
+        "max_abs_prob_diff": 0.0,
+        "pred_disagreements": 0,
+        "macro_f1": 0.9790546259994164
+      },
+      "dynamic": {
+        "max_abs_prob_diff": 0.0,
+        "pred_disagreements": 0,
+        "macro_f1": 0.9790546259994164
+      },
+      "bucketed": {
+        "max_abs_prob_diff": 3.635883331298828e-06,
+        "pred_disagreements": 0,
+        "macro_f1": 0.9790546259994164
+      }
+    },
+    "bert_s42": {
+      "fixed": {
+        "max_abs_prob_diff": 0.0,
+        "pred_disagreements": 0,
+        "macro_f1": 0.9742958512315807
+      },
+      "dynamic": {
+        "max_abs_prob_diff": 0.0,
+        "pred_disagreements": 0,
+        "macro_f1": 0.9742958512315807
+      },
+      "bucketed": {
+        "max_abs_prob_diff": 5.364418029785156e-06,
+        "pred_disagreements": 0,
+        "macro_f1": 0.9742958512315807
+      }
+    },
+    "bert_s2026": {
+      "fixed": {
+        "max_abs_prob_diff": 0.0,
+        "pred_disagreements": 0,
+        "macro_f1": 0.9833394392979885
+      },
+      "dynamic": {
+        "max_abs_prob_diff": 0.0,
+        "pred_disagreements": 0,
+        "macro_f1": 0.9833394392979885
+      },
+      "bucketed": {
+        "max_abs_prob_diff": 4.500150680541992e-06,
+        "pred_disagreements": 0,
+        "macro_f1": 0.9833394392979885
+      }
+    },
+    "distilbert_s13": {
+      "fixed": {
+        "max_abs_prob_diff": 0.0,
+        "pred_disagreements": 0,
+        "macro_f1": 0.9780988716543026
+      },
+      "dynamic": {
+        "max_abs_prob_diff": 0.0,
+        "pred_disagreements": 0,
+        "macro_f1": 0.9780988716543026
+      },
+      "bucketed": {
+        "max_abs_prob_diff": 1.2516975402832031e-06,
+        "pred_disagreements": 0,
+        "macro_f1": 0.9780988716543026
+      }
+    },
+    "distilbert_s42": {
+      "fixed": {
+        "max_abs_prob_diff": 0.0,
+        "pred_disagreements": 0,
+        "macro_f1": 0.9785772599693517
+      },
+      "dynamic": {
+        "max_abs_prob_diff": 0.0,
+        "pred_disagreements": 0,
+        "macro_f1": 0.9785772599693517
+      },
+      "bucketed": {
+        "max_abs_prob_diff": 2.0563602447509766e-06,
+        "pred_disagreements": 0,
+        "macro_f1": 0.9785772599693517
+      }
+    },
+    "distilbert_s2026": {
+      "fixed": {
+        "max_abs_prob_diff": 0.0,
+        "pred_disagreements": 0,
+        "macro_f1": 0.9833383068040025
+      },
+      "dynamic": {
+        "max_abs_prob_diff": 0.0,
+        "pred_disagreements": 0,
+        "macro_f1": 0.9833383068040025
+      },
+      "bucketed": {
+        "max_abs_prob_diff": 2.2649765014648438e-06,
+        "pred_disagreements": 0,
+        "macro_f1": 0.9833383068040025
+      }
+    }
+  },
+  "batch1_latency": {
+    "bert": {
+      "mps": {
+        "fixed_128": {
+          "median_ms": 10.020583518780768,
+          "p95_ms": 11.372499982826412,
+          "calls": 500
+        },
+        "actual_len": {
+          "median_ms": 7.265853986609727,
+          "p95_ms": 8.55800008866936,
+          "calls": 500
+        },
+        "speedup": 1.3791336210785055
+      },
+      "cpu_1thread": {
+        "fixed_128": {
+          "median_ms": 24.621021060738713,
+          "p95_ms": 25.007000076584518,
+          "calls": 500
+        },
+        "actual_len": {
+          "median_ms": 9.646812512073666,
+          "p95_ms": 10.158666991628706,
+          "calls": 500
+        },
+        "speedup": 2.552244177019484
+      }
+    },
+    "distilbert": {
+      "mps": {
+        "fixed_128": {
+          "median_ms": 5.239353980869055,
+          "p95_ms": 5.661124945618212,
+          "calls": 500
+        },
+        "actual_len": {
+          "median_ms": 3.8693334790878,
+          "p95_ms": 4.524625022895634,
+          "calls": 500
+        },
+        "speedup": 1.3540714464611716
+      },
+      "cpu_1thread": {
+        "fixed_128": {
+          "median_ms": 12.576228997204453,
+          "p95_ms": 13.599334051832557,
+          "calls": 500
+        },
+        "actual_len": {
+          "median_ms": 5.002811958547682,
+          "p95_ms": 6.272667087614536,
+          "calls": 500
+        },
+        "speedup": 2.513832041141786
+      }
+    }
+  },
+  "batch32_throughput": {
+    "bert": {
+      "mps": {
+        "fixed": {
+          "sentences_per_sec": 196.38867768205236,
+          "speedup_vs_fixed": 1.0
+        },
+        "dynamic": {
+          "sentences_per_sec": 939.1342866993543,
+          "speedup_vs_fixed": 4.782018483875052
+        },
+        "bucketed": {
+          "sentences_per_sec": 1616.3025249152515,
+          "speedup_vs_fixed": 8.230120717712653
+        }
+      },
+      "cpu_1thread": {
+        "fixed": {
+          "sentences_per_sec": 58.40387362926236,
+          "speedup_vs_fixed": 1.0
+        },
+        "dynamic": {
+          "sentences_per_sec": 335.5602911565636,
+          "speedup_vs_fixed": 5.7455143007575495
+        },
+        "bucketed": {
+          "sentences_per_sec": 611.5535891660666,
+          "speedup_vs_fixed": 10.47111349237043
+        }
+      }
+    },
+    "distilbert": {
+      "mps": {
+        "fixed": {
+          "sentences_per_sec": 391.1433703340046,
+          "speedup_vs_fixed": 1.0
+        },
+        "dynamic": {
+          "sentences_per_sec": 1793.3296416609037,
+          "speedup_vs_fixed": 4.584839671779547
+        },
+        "bucketed": {
+          "sentences_per_sec": 3114.7941009705733,
+          "speedup_vs_fixed": 7.9633053688492605
+        }
+      },
+      "cpu_1thread": {
+        "fixed": {
+          "sentences_per_sec": 116.13642177453112,
+          "speedup_vs_fixed": 1.0
+        },
+        "dynamic": {
+          "sentences_per_sec": 662.9511392678089,
+          "speedup_vs_fixed": 5.7083826859662645
+        },
+        "bucketed": {
+          "sentences_per_sec": 1226.624972461254,
+          "speedup_vs_fixed": 10.561931853235851
+        }
+      }
+    }
+  },
+  "tokenize_ms_per_sentence": {
+    "bert": {
+      "median_ms": 0.025708519387990236,
+      "p95_ms": 0.03616698086261749,
+      "calls": 500
+    },
+    "distilbert": {
+      "median_ms": 0.025916495360434055,
+      "p95_ms": 0.036708894185721874,
+      "calls": 500
+    }
+  }
+}
