@@ -1,0 +1,33 @@
+{
+  "model": "bert-base-uncased",
+  "seed": 42,
+  "device": "mps",
+  "hparams": {
+    "lr": 2e-05,
+    "batch": 32,
+    "epochs": 1,
+    "warmup": 0.1,
+    "weight_decay": 0.01
+  },
+  "history": [
+    {
+      "accuracy": 0.9752498810090433,
+      "macro_f1": 0.9752474081055608,
+      "attack_recall": 0.9647954329210275,
+      "benign_fpr": 0.014285714285714285,
+      "roc_auc": 0.9983978976938064,
+      "epoch": 1,
+      "train_sec": 86.77108429197688
+    }
+  ],
+  "best": {
+    "accuracy": 0.9752498810090433,
+    "macro_f1": 0.9752474081055608,
+    "attack_recall": 0.9647954329210275,
+    "benign_fpr": 0.014285714285714285,
+    "roc_auc": 0.9983978976938064,
+    "epoch": 1,
+    "train_sec": 86.77108429197688
+  },
+  "total_sec": 86.97682829201221
+}
