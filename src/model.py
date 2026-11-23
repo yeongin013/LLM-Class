@@ -1,7 +1,8 @@
 """B0 fine-tuning (PLAN.md stage "기준 모델 B0"): bert-base-uncased and the DistilBERT comparison model.
 
 Run: python src/model.py [--models bert distilbert] [--seeds 13 42 2026]          B0 training
-     python src/model.py --stage exit [--models ...] [--seeds ...]                   T2 probing + early exit
+     python src/model.py --stage exit [--models ...] [--seeds ...] [--name ...]      T2 probing + early exit
+       (GQA: --models bert_gqa1 --name t2_exit_gqa1)
      python src/model.py --stage prune [--models ...] [--seeds ...]                  T3 token pruning
      python src/model.py --stage gqa [--seeds ...]                                   T4 GQA conversion (BERT)
 Per run writes checkpoints/<model>_s<seed>/ (best epoch by validation macro F1; gitignored)
@@ -195,7 +196,7 @@ def exit_flops(n, depth, L, d):
     return 2 * (depth * (12 * n * d * d + 2 * n * n * d) + d)  # linear exit head: d multiply-adds
 
 
-def early_exit(keys, seeds, latency_seed=13, n_latency=500, f1_drop=0.005):
+def early_exit(keys, seeds, latency_seed=13, n_latency=500, f1_drop=0.005, name="t2_exit"):
     import statistics
     from sklearn.linear_model import LogisticRegression
     from bench import config_dims, latency
@@ -208,7 +209,7 @@ def early_exit(keys, seeds, latency_seed=13, n_latency=500, f1_drop=0.005):
             run = f"{key}_s{seed}"
             path = ROOT / "checkpoints" / run
             tok = AutoTokenizer.from_pretrained(path)
-            model = AutoModelForSequenceClassification.from_pretrained(path).to(DEVICE)
+            model = load_model(path).to(DEVICE)
             L, d = config_dims(model.config)
             Ftr, _ = layer_cls(model, tok, Xtr)
             Fva, full_probs = layer_cls(model, tok, Xva)
@@ -267,11 +268,11 @@ def early_exit(keys, seeds, latency_seed=13, n_latency=500, f1_drop=0.005):
             out["latency"][run] = lat
             print(run, {dv: {k: round(v["median_ms"], 2) for k, v in r.items()} for dv, r in lat.items()})
 
-    (RESULTS / "t2_exit.json").write_text(json.dumps(out, indent=2))
-    plot_exit(out)
+    (RESULTS / f"{name}.json").write_text(json.dumps(out, indent=2))
+    plot_exit(out, name)
 
 
-def plot_exit(out):
+def plot_exit(out, name="t2_exit"):
     import statistics
     import matplotlib
     matplotlib.use("Agg")
@@ -310,7 +311,7 @@ def plot_exit(out):
             ax.spines[s].set_visible(False)
         ax.tick_params(colors=muted)
     fig.tight_layout()
-    fig.savefig(RESULTS / "t2_exit.png", dpi=150)
+    fig.savefig(RESULTS / f"{name}.png", dpi=150)
 
 
 # ---------------------------------------------------------------- T3: attention-score token pruning
@@ -533,9 +534,10 @@ if __name__ == "__main__":
     ap.add_argument("--stage", choices=["b0", "exit", "prune", "gqa"], default="b0")
     ap.add_argument("--models", nargs="+", default=list(MODELS))
     ap.add_argument("--seeds", nargs="+", type=int, default=[13, 42, 2026])
+    ap.add_argument("--name", default="t2_exit", help="exit stage output name (results/<name>.json/.png)")
     args = ap.parse_args()
     if args.stage == "exit":
-        early_exit(args.models, args.seeds)
+        early_exit(args.models, args.seeds, name=args.name)
     elif args.stage == "prune":
         token_pruning(args.models, args.seeds)
     elif args.stage == "gqa":

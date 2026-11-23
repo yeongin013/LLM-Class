@@ -241,10 +241,36 @@ validation, seed 3개 평균 (지연 시간은 seed 13, 500문장, batch 1 평�
 - BERT 쪽은 단계 3의 최선 조합을 쓴다.
 - 구간을 바꿔가며 BERT로 보내는 비율, F1, 평균 지연 시간을 기록한다. 기대 평균 지연 시간은 t_tfidf + p·t_bert이다(p = BERT로 보내는 비율).
 
+**단계 4 결과 (2026-11-23, `python src/final.py cascade` → `results/final/cascade_validation.json`):**
+- 구현: TF-IDF 확신도 max(p, 1−p)가 t 미만인 문장만 BERT 쪽(early exit, τ는 T2에서 고른 값)으로 보낸다. t는 BERT로 보내는 비율 q가 되도록 validation 확신도의 분위수로 정한다. 지연 시간은 TF-IDF → 토큰화 → early exit 전체 경로를 batch 1로 실제 측정했다.
+- GQA g=1에도 T2를 적용했다(`--stage exit --models bert_gqa1 --name t2_exit_gqa1`). 얕은 층 probe 정확도가 B0보다 낮아(1층 F1 0.89 vs 0.94) 평균 3.2층까지 실행되고, MPS 평균 2.30 ms로 B0+exit(1.52 ms)보다 느리다.
+
+validation 전체, seed 3개 평균 (지연 시간은 seed 13, 500문장, batch 1 평균, MPS):
+
+| BERT로 보낸 비율 | BERT+exit F1 | 지연 시간 | DistilBERT+exit F1 | 지연 시간 | GQA1+exit F1 | 지연 시간 |
+|---|---|---|---|---|---|---|
+| 0% (TF-IDF만) | 0.975 | 0.51 ms | 0.975 | 0.45 ms | 0.975 | 0.54 ms |
+| 5% | **0.982** | 0.79 ms | **0.982** | 0.64 ms | 0.980 | 1.01 ms |
+| 10% | 0.982 | 0.96 ms | 0.981 | 0.80 ms | 0.978 | 1.25 ms |
+| 20% | 0.981 | 1.30 ms | 0.981 | 0.91 ms | 0.977 | 1.39 ms |
+| 50% | 0.978 | 2.19 ms | 0.980 | 1.51 ms | 0.976 | 2.39 ms |
+| 100% (exit만) | 0.977 | 1.62 ms | 0.979 | 1.32 ms | 0.976 | 2.39 ms |
+
+- 기준: B0 BERT HF 추론은 128 고정 padding 10.4 ms, 동적 padding 7.51 ms다.
+- **cascade가 TF-IDF 단독, BERT 단독보다 모두 정확하다.** TF-IDF가 확신하지 못하는 5~20% 문장에서 BERT가 TF-IDF의 오답을 바로잡는다. 두 모델의 오답이 서로 다르다는 뜻이다.
+- 50%에서 100%보다 느린 이유: 보내는 문장이 TF-IDF가 어려워한 문장이라 early exit도 깊이 내려간다. 거기에 TF-IDF 비용이 더해진다.
+- 단계 5 규칙에 주는 영향: validation에서는 TF-IDF 단독이 B0와 0.5%p 이내다. 그래서 "0.5%p 이내에서 가장 싼 설정" 규칙을 쓰면 q=0(TF-IDF 단독)이 뽑힌다. 단계 5에서는 q를 "tune F1이 가장 높은 값"으로 고른다.
+
 ### 단계 5. 통합과 최종 평가
 - 모든 변형 모델을 정확도-지연 시간 산점도에 놓고 Pareto 곡선을 그린다.
 - 최종 후보 2~3개만 `test_clean`으로 한 번 평가한다.
 - 오분류 분석: 라벨 노이즈, 키워드 의존 판정, 변형 표기, early exit에서 너무 일찍 멈춘 경우
+- 2026-11-23 추가 (평가 신뢰도 보강): validation을 층화 50/50으로 tune(1,050)과 check(1,051)로 나눈다. τ, 보내는 비율, 판정 threshold는 tune에서만 고르고, 후보 비교와 최종 후보 선정은 check에서 한다. test_clean에서는 B0 대비 macro F1 차이의 paired bootstrap 95% CI(2,000회, seed 평균 차이)와 seed별 McNemar exact test를 보고한다.
+
+**단계 5 결과 (2026-11-23, `python src/final.py final` → `results/final/final.json`, `pareto_check.png`, `errors_test.csv`):** `report.md`에 정리했다. 요약:
+- 최종 후보(check에서 B0 − 0.5%p 이상인 후보 중 MPS 평균 지연 시간이 가장 짧은 3개): DistilBERT cascade, BERT cascade, GQA1 cascade.
+- test_clean에서 셋 다 B0보다 F1이 높고(+0.7~1.2%p, bootstrap 95% CI가 모두 0보다 큼), B0 동적 padding보다 7~9배, 128 고정 padding보다 9~11배 빠르다(MPS). **성공 기준을 충족했다.**
+- 절차상 공개: 첫 실행에서는 지연 시간을 seed 13 설정으로만 쟀다. 그런데 seed마다 보내는 비율이 0~35%로 달라 대표성이 없었다. 그래서 seed 3개 평균으로 고쳐 다시 실행했다. 이때 test 결과를 이미 한 번 본 상태였다. 최종 후보는 check만으로 정하며, 바뀐 것은 지연 시간 측정 방식뿐이다. 첫 실행의 후보는 DistilBERT cascade, GQA1 cascade, DistilBERT exit였다.
 
 ## 5. 파일 구성 (최소)
 
@@ -258,6 +284,7 @@ LLM_Class/
     tfidf.py          TF-IDF 기준선과 cascade 1단계
     model.py          B0 학습, exit head, token pruning, GQA 변환
     bench.py          FLOPs, 지연 시간, 처리량 측정
+    final.py          단계 4 cascade, 단계 5 최종 평가
   results/            실험별 JSON과 그림
   checkpoints/        학습된 모델 (git 제외)
   report.md           최종 보고서
@@ -276,8 +303,8 @@ LLM_Class/
 | 3-T1 | 동적 padding | 정확도가 B0와 동일 (구현 검증) | 완료 (2026-11-19) |
 | 3-T2 | probing → early exit | 층별 정확도 곡선 | 완료 (2026-11-19) |
 | 3-T3·T4 | token pruning, GQA 변환 | g=12 출력이 B0와 일치 (T4 구현 검증) | T3 완료 (2026-11-19), T4 완료 (2026-11-23) |
-| 4 | Cascade | BERT로 보내는 비율-F1 곡선 | |
-| 5 | 통합, 최종 평가, 보고서 | 성공 기준 달성 여부를 그대로 보고 | |
+| 4 | Cascade | BERT로 보내는 비율-F1 곡선 | 완료 (2026-11-23) |
+| 5 | 통합, 최종 평가, 보고서 | 성공 기준 달성 여부를 그대로 보고 | 완료 (2026-11-23) |
 
 ## 7. 위험 요소와 대응
 
