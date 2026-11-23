@@ -6,10 +6,12 @@ Run: python src/final.py cascade   stage 4: forward-ratio sweep on all of valida
                                    2-3 finalists once on test_clean with paired bootstrap + McNemar, and dump errors.
 A cascade answers with TF-IDF when its confidence max(p, 1-p) >= t, otherwise runs the BERT side (with early exit).
 """
+import collections
 import csv
 import json
 import math
 import random
+import re
 import statistics
 import sys
 
@@ -106,8 +108,8 @@ def on_devices(make_fn, texts):
     return res
 
 
-def references(texts, tf):
-    """B0 BERT as a plain HF forward (fixed 128 padding = the PLAN baseline, and dynamic) and TF-IDF alone."""
+def ref_makers():
+    """B0 BERT as a plain HF forward: fixed 128 padding (the PLAN baseline) and dynamic padding."""
     path = ROOT / "checkpoints" / f"bert_s{LAT_SEED}"
     tok, model = AutoTokenizer.from_pretrained(path), load_model(path).eval()
 
@@ -122,8 +124,13 @@ def references(texts, tf):
                     return model(**{k: v.to(device) for k, v in enc.items()}).logits
             return fn
         return make
-    return {"b0_fixed128": on_devices(hf(True), texts), "b0_dynamic": on_devices(hf(False), texts),
-            "tfidf_only": {"cpu_1thread": latency(lambda x: tf.predict_proba([x]), texts, "cpu")}}
+    return {"b0_fixed128": hf(True), "b0_dynamic": hf(False)}
+
+
+def references(texts, tf):
+    """B0 references (see ref_makers) and TF-IDF alone."""
+    return {k: on_devices(make, texts) for k, make in ref_makers().items()} | {
+        "tfidf_only": {"cpu_1thread": latency(lambda x: tf.predict_proba([x]), texts, "cpu")}}
 
 
 def side(family, seed):
@@ -365,5 +372,158 @@ def plot_pareto(summary):
     fig.savefig(OUT / "pareto_check.png", dpi=150)
 
 
+# ---------------------------------------------------------------- robustness checks (report.md section 5)
+
+KINDS = ["full", "exit", "cascade"]
+
+
+def saved_params():
+    out = json.loads((OUT / "final.json").read_text())
+    params = {}
+    for key, v in out["params"].items():
+        family, kind, seed = key.split("/")
+        params[family, kind, int(seed[1:])] = v
+    return out, params
+
+
+def latency_repeat(rounds=5):
+    """Re-measure the stage 5 test latencies `rounds` times, shuffling the order of (config, seed) units and of
+    the two devices every round, so warm-up order and heat cannot favor one config."""
+    out, params = saved_params()
+    texts = load("test_clean")[0][:N_LAT]
+    tf = tfidf_model()
+    makers, loaded = ref_makers(), {}
+    units = [(c, None) for c in makers] + [("tfidf_only", None)] + [(c, s) for c in out["finalists"] for s in SEEDS]
+    rng = random.Random(0)
+    runs = {}
+    for r in range(rounds):
+        rng.shuffle(units)
+        for c, seed in units:
+            for device in (["cpu"] if c == "tfidf_only" else rng.sample(["mps", "cpu"], 2)):
+                if c == "tfidf_only":
+                    def make(dv):
+                        return lambda x: tf.predict_proba([x])
+                elif seed is None:
+                    make = makers[c]
+                else:
+                    family, kind = c.split("/")
+                    if (family, seed) not in loaded:
+                        loaded[family, seed] = side(family, seed)
+                    tok, model, heads = loaded[family, seed]
+                    cfg = params[family, kind, seed]
+
+                    def make(dv, tok=tok, model=model, heads=heads, cfg=cfg):
+                        return pipeline(tf, tok, model, heads, cfg["tau"], cfg["t"], dv)
+                threads = torch.get_num_threads()
+                if device == "cpu":
+                    torch.set_num_threads(1)
+                ms = latency(make(device), texts, device)["mean_ms"]
+                torch.set_num_threads(threads)
+                runs.setdefault(c, {}).setdefault(device, {}).setdefault(r, []).append(ms)
+        print("round", r + 1, "done")
+    summary = {}
+    for c, by_dev in runs.items():
+        for device, by_round in by_dev.items():
+            vals = [statistics.mean(v) for v in by_round.values()]  # mean over seeds within a round
+            summary.setdefault(c, {})["mps" if device == "mps" else "cpu_1thread"] = {
+                "mean_ms": statistics.mean(vals), "sd_ms": statistics.stdev(vals), "min_ms": min(vals),
+                "max_ms": max(vals), "rounds": vals}
+    for c in out["finalists"]:
+        summary[c]["speedup_vs_b0"] = {
+            dev: {ref: summary[ref][dev]["mean_ms"] / summary[c][dev]["mean_ms"] for ref in ["b0_dynamic", "b0_fixed128"]}
+            for dev in ["mps", "cpu_1thread"]}
+    (OUT / "latency_repeat.json").write_text(json.dumps({"rounds": rounds, "texts": len(texts), "summary": summary},
+                                                        indent=2))
+    print(json.dumps({c: {d: (round(v["mean_ms"], 2), round(v["sd_ms"], 2)) for d, v in s.items() if "mean_ms" in v}
+                      for c, s in summary.items()}, indent=1))
+
+
+def resplit(n_splits=20, families=FAMILIES, name="resplit"):
+    """Repeat the stage 5 selection over `n_splits` random tune/check splits of validation (split 0 = the one in
+    final.json). Reports how chosen settings, check F1 and finalist membership vary with the split, and - as a
+    sensitivity analysis only, nothing is selected from it - how test_clean F1 varies."""
+    Xva, yva = load("validation")
+    Xte, yte = load("test_clean")
+    yva, yte = np.array(yva), np.array(yte)
+    tf = tfidf_model()
+    tfv, tft = tf.predict_proba(Xva)[:, 1], tf.predict_proba(Xte)[:, 1]
+    lat = {c: v["mps_mean_ms"] for c, v in json.loads((OUT / "final.json").read_text())["check_summary"].items()}
+    cands = [f"{f}/{k}" for f in families for k in KINDS]
+    P = {(f, s, sp): exit_matrix(f"{f}_s{s}", sp) for f in set(families) | {"bert"} for s in SEEDS
+         for sp in ["validation", "test_clean"]}
+    per_split = []
+    for sp in range(n_splits):
+        tune, check = split_validation(yva.tolist(), seed=sp)
+        res = {c: [] for c in cands}
+        for seed in SEEDS:
+            ref = best_f1(yva[tune], P["bert", seed, "validation"][-1].numpy()[tune])
+            for c in cands:
+                family, kind = c.split("/")
+                Pv, Pt = P[family, seed, "validation"], P[family, seed, "test_clean"]
+                cfg = choose(Pv[:, tune], tfv[tune], yva[tune], kind, ref)
+                pc = run_config(Pv[:, check], tfv[check], cfg["tau"], cfg["t"])[0]
+                pt, _, fwd = run_config(Pt, tft, cfg["tau"], cfg["t"])
+                res[c].append(cfg | {"check_f1": evaluate(yva[check], pc, cfg["theta"])["macro_f1"],
+                                     "test_f1": evaluate(yte, pt, cfg["theta"])["macro_f1"],
+                                     "test_forwarded": float(fwd.mean())})
+        mean = {c: {m: statistics.mean(r[m] for r in rs) for m in ["check_f1", "test_f1", "test_forwarded"]}
+                for c, rs in res.items()}
+        b0 = mean["bert/full"]["check_f1"]
+        ok = [c for c in cands if c != "bert/full" and c in lat and mean[c]["check_f1"] >= b0 - F1_DROP]
+        per_split.append({"split": sp, "runs": res, "mean": mean, "finalists": sorted(ok, key=lambda c: lat[c])[:3]})
+        print("split", sp, per_split[-1]["finalists"])
+
+    summary = {}
+    for c in cands:
+        cf = [s["mean"][c]["check_f1"] for s in per_split]
+        tf1 = [s["mean"][c]["test_f1"] for s in per_split]
+        runs = [r for s in per_split for r in s["runs"][c]]
+        summary[c] = {
+            "check_f1": {"mean": statistics.mean(cf), "sd": statistics.stdev(cf), "min": min(cf), "max": max(cf)},
+            "test_f1": {"mean": statistics.mean(tf1), "sd": statistics.stdev(tf1), "min": min(tf1), "max": max(tf1)},
+            "test_f1_minus_b0": statistics.mean(s["mean"][c]["test_f1"] - s["mean"]["bert/full"]["test_f1"] for s in per_split),
+            "finalist_share": sum(c in s["finalists"] for s in per_split) / n_splits,
+            "chosen_theta": dict(sorted(collections.Counter(r["theta"] for r in runs).items())),
+            "chosen_tau": dict(sorted(collections.Counter(r["tau"] for r in runs).items())),
+            "test_forwarded": {"mean": statistics.mean(r["test_forwarded"] for r in runs),
+                               "min": min(r["test_forwarded"] for r in runs), "max": max(r["test_forwarded"] for r in runs)}}
+    (OUT / f"{name}.json").write_text(json.dumps({"n_splits": n_splits, "summary": summary, "per_split": per_split},
+                                                 indent=2, default=str))
+    print(json.dumps({c: {"check": round(v["check_f1"]["mean"], 4), "test": round(v["test_f1"]["mean"], 4),
+                          "test_sd": round(v["test_f1"]["sd"], 4), "finalist": v["finalist_share"]}
+                      for c, v in summary.items()}, indent=1))
+
+
+EXPLICIT = re.compile(r"\b(ignore|disregard|forget|override|bypass|jailbreak|pretend|dan|developer mode|"
+                      r"previous instructions|system prompt|no restrictions|unrestricted)\b", re.I)
+
+
+def short_attacks(max_words=8):
+    """How common are short attacks without explicit override words in each split, and how well do TF-IDF and B0
+    (threshold 0.5, mean of 3 seeds) catch them? EXPLICIT is a hand-made keyword heuristic."""
+    tf = tfidf_model()
+    out = {"max_words": max_words, "explicit_pattern": EXPLICIT.pattern, "splits": {}}
+    for split in ["train", "validation", "test_clean"]:
+        X, y = load(split)
+        y = np.array(y)
+        short = np.array([len(t.split()) <= max_words for t in X])
+        implicit = short & np.array([not EXPLICIT.search(t) for t in X])
+        att = y == 1
+        rec = {"attacks": int(att.sum()), "short_attacks": int((att & short).sum()),
+               "short_implicit_attacks": int((att & implicit).sum()),
+               "short_implicit_share_of_attacks": float((att & implicit).sum() / att.sum()),
+               "short_implicit_benign": int((~att & implicit).sum())}
+        if split != "train":
+            tfp = tf.predict_proba(X)[:, 1]
+            b0 = np.mean([exit_matrix(f"bert_s{s}", split)[-1].numpy() >= 0.5 for s in SEEDS], axis=0)
+            for nm, mask in [("all_attacks", att), ("short_implicit_attacks", att & implicit),
+                             ("other_attacks", att & ~implicit)]:
+                rec[f"recall_{nm}"] = {"tfidf": float((tfp[mask] >= 0.5).mean()), "b0_seed_mean": float(b0[mask].mean())}
+        out["splits"][split] = rec
+    (OUT / "short_attacks.json").write_text(json.dumps(out, indent=2))
+    print(json.dumps(out["splits"], indent=1))
+
+
 if __name__ == "__main__":
-    {"cascade": cascade, "final": final}[sys.argv[1]]()
+    {"cascade": cascade, "final": final, "latency_repeat": latency_repeat, "resplit": resplit,
+     "short_attacks": short_attacks}[sys.argv[1]]()

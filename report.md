@@ -9,6 +9,8 @@
 - **성공 기준(B0 대비 F1 하락 0.5%p 이내, 평균 지연 시간 3배 이상 단축)을 충족했다.**
 - 최종 후보 셋은 모두 TF-IDF → BERT 계열 cascade다. `test_clean`에서 B0보다 macro F1이 0.7~1.2%p 높다.
 - 지연 시간은 MPS 기준으로 B0 동적 padding보다 7.0~9.0배, PLAN의 기준인 128 고정 padding보다 8.6~11.1배 빠르다.
+- 측정 순서를 섞어 5회 반복 측정하면 배수가 조금 내려간다. 동적 padding 대비 6.0~8.0배, 128 고정 대비 8.3~11.0배다(5.1절).
+- validation 분할을 20번 바꿔도 같은 후보가 뽑히고 결론이 유지된다(5.2절).
 - 가장 좋은 조합은 **TF-IDF → DistilBERT + early exit**다. 문장의 약 80%는 TF-IDF가 답하고, 나머지만 early exit를 붙인 DistilBERT가 처리한다.
 - 강의 기법 4가지 중 시간을 크게 줄인 것은 **early exit(T2)** 하나다. 동적 padding(T1)은 batch 처리량에서만 크다. token pruning(T3)과 GQA(T4)는 짧은 문장 batch 1 추론에서 효과가 거의 없다.
 
@@ -100,18 +102,108 @@ B0 대비 유의성 (`test_clean`):
 
 - 남은 오류의 주된 원인은 모델 속도가 아니라 **데이터 분포**다.
 - validation과 test_clean 사이에 모든 모델의 F1이 약 2%p 떨어지고, 떨어진 몫은 주로 공격 recall이다(B0 0.968 → 0.926).
-- 놓친 공격의 대부분이 짧고 우회적인 추출 요청이다. 이것을 잡으려면 비용 기법이 아니라 이런 유형의 학습 데이터가 더 필요할 것이다. 이 유형이 split별로 얼마나 있는지는 세지 않았다.
+- 놓친 공격의 대부분이 짧고 우회적인 추출 요청이다. 5.4절에서 split별로 세어 보면, 이 유형은 test에 많기도 하지만 **같은 유형 안에서도 test 쪽이 더 어렵다.**
 
-## 5. 한계
+## 5. 추가 검증 (2026-11-23)
 
-- **지연 시간 측정 범위:** batch 1, 500문장, 한 장비(M4 Pro)에서만 쟀다. 측정 순서와 발열의 영향을 완전히 배제하지 못했다(T4의 g=2 MPS 평균이 이상치로 높음).
-- **seed별 설정 차이:** tune 절반(1,050행)이 작아서 seed마다 고른 τ, 보내는 비율(4~35%), threshold(0.05~0.35)가 크게 다르다. 그래서 test 성능의 seed 간 편차가 크다.
+6절의 한계를 줄이려고 추가로 네 가지를 확인했다. 결론은 바뀌지 않았다.
+
+### 5.1 지연 시간 반복 측정 (`python src/final.py latency_repeat` → `results/final/latency_repeat.json`)
+
+- 측정 방법:
+  - 2절의 test 지연 시간을 5회 다시 쟀다.
+  - 매 회 (설정, seed) 단위의 측정 순서와 장치(MPS·CPU) 순서를 무작위로 섞었다.
+  - 아래 값은 회차 평균 ± 표준편차이고, 각 회차 값은 seed 3개의 평균이다.
+
+| 모델 | MPS | CPU 1스레드 | MPS 속도 향상 (동적 / 128 고정 대비) | CPU 속도 향상 (동적 / 128 고정 대비) |
+|---|---|---|---|---|
+| B0, 128 고정 padding | 10.83 ± 0.13 ms | 26.94 ± 0.59 ms | — | — |
+| B0, 동적 padding | 7.84 ± 0.23 ms | 12.18 ± 0.20 ms | — | — |
+| TF-IDF → DistilBERT+exit | 0.98 ± 0.02 ms | 1.12 ± 0.10 ms | 8.0배 / 11.0배 | 10.9배 / 24.1배 |
+| TF-IDF → BERT+exit | 1.21 ± 0.02 ms | 1.42 ± 0.16 ms | 6.5배 / 8.9배 | 8.6배 / 19.0배 |
+| TF-IDF → GQA1 BERT+exit | 1.30 ± 0.02 ms | 1.50 ± 0.04 ms | 6.0배 / 8.3배 | 8.1배 / 18.0배 |
+
+- 회차 간 편차는 작다(MPS 표준편차 0.02 ms).
+- 2절의 단일 측정보다 cascade가 7~12% 느리게 나왔다. 2절의 배수는 약간 낙관적이었다는 뜻이다.
+- 그래도 모든 후보가 성공 기준(3배)을 넉넉히 넘는다.
+
+### 5.2 validation 분할 20회 반복 (`python src/final.py resplit` → `results/final/resplit.json`)
+
+- 측정 방법:
+  - tune/check 분할을 무작위로 20번 바꿨다(분할 0이 2절의 분할이다).
+  - 각 분할에서 단계 5의 설정 선택과 최종 후보 선정을 그대로 반복했다.
+  - test F1은 분할마다 계산했지만 민감도 분석용일 뿐이고, 이것으로는 아무것도 고르지 않았다.
+
+| 후보 | check F1 | test F1 (평균 ± sd) | B0 대비 test | 최종 후보에 든 비율 |
+|---|---|---|---|---|
+| B0 (bert/full) | 0.980 ± 0.003 | 0.953 ± 0.002 | — | — |
+| TF-IDF → DistilBERT+exit | 0.982 ± 0.004 | 0.962 ± 0.002 | +0.97%p | 95% |
+| TF-IDF → BERT+exit | 0.981 ± 0.004 | 0.960 ± 0.001 | +0.77%p | 90% |
+| TF-IDF → GQA1 BERT+exit | 0.977 ± 0.005 | 0.957 ± 0.004 | +0.46%p | 65% |
+| DistilBERT+exit | 0.982 ± 0.003 | 0.960 ± 0.002 | +0.78%p | 35% |
+| DistilBERT 단독 | 0.985 ± 0.002 | 0.970 ± 0.001 | +1.75%p | 5% |
+
+- 결과 해석:
+  - 최종 후보와 "cascade가 B0보다 정확하다"는 결론은 분할에 거의 흔들리지 않는다.
+  - 2절의 GQA1 cascade(0.963)는 운이 좋은 분할이었다. 20회 평균은 0.957이다.
+- 설정값은 흔들린다:
+  - 판정 threshold는 0.05~0.65, BERT로 보내는 비율은 0~35%로 퍼진다.
+  - 그 이유는 F1이 넓은 설정 범위에서 거의 평평하기 때문이다. 어떤 값을 골라도 결과가 비슷하다.
+- 정확도만 보면 DistilBERT 단독(4.2 ms)이 test에서 가장 좋다. "정확도를 지키며 가장 빠른 것"을 고르는 규칙이라 최종 후보에는 들지 않는다.
+
+### 5.3 exit head를 fine-tuning과 함께 학습 (`--stage joint` → `results/t2_exit_joint.json`, `results/final/resplit_joint.json`)
+
+- 방법:
+  - fine-tuning 때 각 층의 [CLS]에 선형 exit head를 붙여 함께 학습했다.
+  - 손실은 PABEE식 가중 평균 Σ j·CE_j / Σ j로, 깊은 층일수록 비중이 크다.
+  - B0와 같은 학습 설정(3 epoch)을 쓰고, seed 3개로 반복했다.
+- 이 실험은 test를 본 뒤에 추가한 것이다. 그래서 최종 후보 비교에는 넣지 않고 탐색 결과로만 보고한다.
+
+| 모델 | 층별 exit 정확도 (validation, 1층 / 3층 / 6층 / 마지막 층) | early exit 평균 깊이 | exit F1 (validation) | early exit MPS (seed 13) |
+|---|---|---|---|---|
+| BERT, 사후 exit head (T2) | 0.939 / 0.955 / 0.969 / 0.971 | 2.0층 | 0.977 | 1.52 ms |
+| BERT, 동시 학습 | 0.524 / 0.966 / 0.982 / 0.970 | 2.9층 | 0.980 | 2.99 ms |
+| DistilBERT, 사후 exit head | 0.945 / 0.976 / — / 0.973 | 1.5층 | 0.979 | 1.24 ms |
+| DistilBERT, 동시 학습 | 0.807 / 0.983 / — / 0.975 | 2.3층 | 0.982 | 1.87 ms |
+
+- 중간 층이 강해진다. BERT는 6층(0.982)이 마지막 층(0.970)보다 정확하다. 깊이 갈수록 오히려 나빠지는 "overthinking" 현상이다.
+- 1층은 손실 가중치가 작아(1/78) 무너진다. 그래서 early exit가 더 깊이 내려가고, 지연 시간이 1.5~2배 늘어난다.
+- 분할 20회 기준 test F1(민감도 분석):
+
+  | 모델 | test F1 | B0 대비 |
+  |---|---|---|
+  | DistilBERT 동시 학습 + exit | 0.967 | +1.44%p |
+  | DistilBERT 동시 학습 + cascade | 0.968 | +1.53%p |
+  | BERT 동시 학습 + exit | 0.956 | +0.38%p |
+
+- 정리: 정확도를 더 원하면 동시 학습이 낫고, 속도를 원하면 사후 exit head가 낫다. 1층 가중치를 키우는 손실 설계(예: 균등 가중)로 둘을 함께 얻을 수 있는지는 확인하지 않았다.
+
+### 5.4 짧고 우회적인 공격의 split별 분포 (`python src/final.py short_attacks` → `results/final/short_attacks.json`)
+
+- 정의: 8단어 이하이고, ignore, bypass, jailbreak 같은 명시적 공격 단어가 없는 공격 문장. 단어 목록은 직접 만든 휴리스틱이다.
+
+| split | 공격 중 이 유형 비율 | 이 유형의 recall (TF-IDF / B0) | 나머지 공격의 recall (TF-IDF / B0) |
+|---|---|---|---|
+| train | 27% | — | — |
+| validation | 61% | 0.942 / 0.957 | 0.988 / 0.985 |
+| test_clean | 67% | 0.872 / 0.871 | 0.987 / 0.979 |
+
+- train에는 이 유형이 적다(27%). validation과 test에서는 공격의 대부분을 차지한다.
+- test의 recall 하락은 이 유형 안에서 일어난다(B0 0.957 → 0.871). 나머지 공격은 거의 그대로다.
+- 유형 비율 차이만으로는 하락이 설명되지 않는다. validation의 유형별 recall에 test의 비율을 적용하면 약 0.966으로, validation의 0.968과 거의 같다.
+- 결론: test의 짧은 우회 공격은 validation의 같은 유형보다 어렵다. validation만으로는 이 차이를 미리 알 수 없었다.
+
+## 6. 한계
+
+- **지연 시간 측정 범위:** batch 1, 500문장, 한 장비(M4 Pro)에서만 쟀다. 측정 순서와 발열의 영향은 5.1에서 순서를 섞어 반복 측정해 줄였다.
+- **seed별 설정 차이:** tune 절반(1,050행)이 작아서 seed마다 고른 τ, 보내는 비율(0~35%), threshold(0.05~0.65)가 크게 다르다. 다만 5.2에서 보듯 F1이 넓은 범위에서 평평해서, 최종 결론에 주는 영향은 작다.
 - **선택 규칙 변경:** cascade의 보내는 비율 규칙은 원래 계획("0.5%p 이내에서 가장 싼 설정")에서 "tune F1이 가장 높은 값"으로 바꿨다. validation에서는 TF-IDF 단독이 B0와 0.5%p 이내라서, 원래 규칙으로는 TF-IDF 단독이 선택되기 때문이다. 근거는 단계 4 곡선이다.
 - **절차상 공개:** 단계 5를 한 번 실행한 뒤, 지연 시간을 seed 13 설정으로만 쟀다는 문제를 발견해 seed 평균으로 고쳐 다시 실행했다. test 결과를 본 뒤였다. 최종 후보는 check만으로 정했고, 바뀐 것은 지연 시간 측정 방식뿐이다. 첫 실행의 후보 셋도 모두 B0보다 F1이 높고 빨랐다(`PLAN.md` 단계 5).
 - **보내는 비율의 이동:** TF-IDF의 확신도 분포가 데이터에 따라 달라서, test에서 실제로 BERT로 보낸 비율이 tune의 목표와 다르다. 운영에서는 이 비율을 감시해야 한다.
-- **T2 실험 범위:** exit head를 B0 학습 뒤 따로 붙였다. fine-tuning 때 함께 학습하는 방식(DeeBERT)은 해보지 않았다.
+- **T2 실험 범위:** 최종 후보는 exit head를 B0 학습 뒤 따로 붙인 방식이다. 함께 학습하는 방식(5.3)은 test를 본 뒤에 추가한 탐색이라 최종 비교에 넣지 않았다.
+- **유형 정의:** 5.4의 "짧고 우회적인 공격"은 단어 수와 키워드 목록으로 정한 휴리스틱이다. 사람이 하나하나 분류한 것이 아니다.
 
-## 6. 재현
+## 7. 재현
 
 ```bash
 .venv/bin/python src/prepare_data.py
@@ -124,4 +216,11 @@ B0 대비 유의성 (`test_clean`):
 .venv/bin/python src/model.py --stage exit --models bert_gqa1 --name t2_exit_gqa1
 .venv/bin/python src/final.py cascade                                           # 단계 4
 .venv/bin/python src/final.py final                                             # 단계 5
+# 추가 검증 (5절)
+.venv/bin/python src/final.py latency_repeat
+.venv/bin/python src/final.py resplit
+.venv/bin/python src/final.py short_attacks
+.venv/bin/python src/model.py --stage joint
+.venv/bin/python src/model.py --stage exit --models bert_joint distilbert_joint --name t2_exit_joint
+.venv/bin/python -c "import sys; sys.path.insert(0, 'src'); import final; final.resplit(families=['bert', 'bert_joint', 'distilbert_joint'], name='resplit_joint')"
 ```

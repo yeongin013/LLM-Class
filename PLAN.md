@@ -272,6 +272,12 @@ validation 전체, seed 3개 평균 (지연 시간은 seed 13, 500문장, batch 
 - test_clean에서 셋 다 B0보다 F1이 높고(+0.7~1.2%p, bootstrap 95% CI가 모두 0보다 큼), B0 동적 padding보다 7~9배, 128 고정 padding보다 9~11배 빠르다(MPS). **성공 기준을 충족했다.**
 - 절차상 공개: 첫 실행에서는 지연 시간을 seed 13 설정으로만 쟀다. 그런데 seed마다 보내는 비율이 0~35%로 달라 대표성이 없었다. 그래서 seed 3개 평균으로 고쳐 다시 실행했다. 이때 test 결과를 이미 한 번 본 상태였다. 최종 후보는 check만으로 정하며, 바뀐 것은 지연 시간 측정 방식뿐이다. 첫 실행의 후보는 DistilBERT cascade, GQA1 cascade, DistilBERT exit였다.
 
+**추가 검증 (2026-11-23, `report.md` 5절):** 결론은 바뀌지 않았다.
+- 측정 순서를 섞은 지연 시간 5회 반복: cascade가 단일 측정보다 7~12% 느리다. 그래도 B0 동적 padding보다 6.0~8.0배, 128 고정 padding보다 8.3~11.0배 빠르다(MPS).
+- validation 분할 20회 반복: DistilBERT cascade가 최종 후보에 든 비율 95%, BERT cascade 90%. test F1 차이(B0 대비 +0.8~1.0%p)의 분할 간 편차는 0.1~0.2%p다.
+- exit head를 fine-tuning과 함께 학습(PABEE식 가중 손실, `--stage joint`): 중간 층 정확도는 오르지만 1층이 무너진다. 그래서 early exit가 더 깊이 가고 1.5~2배 느리다. test를 본 뒤 추가한 탐색이라 최종 비교에는 넣지 않는다.
+- 짧은 우회 공격(8단어 이하, 명시적 공격 단어 없음): 공격 중 비율이 train 27%, validation 61%, test 67%다. test의 recall 하락(B0 0.957 → 0.871)은 대부분 이 유형 안에서 생긴다.
+
 ## 5. 파일 구성 (최소)
 
 ```

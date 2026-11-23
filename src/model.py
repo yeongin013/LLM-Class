@@ -5,6 +5,8 @@ Run: python src/model.py [--models bert distilbert] [--seeds 13 42 2026]        
        (GQA: --models bert_gqa1 --name t2_exit_gqa1)
      python src/model.py --stage prune [--models ...] [--seeds ...]                  T3 token pruning
      python src/model.py --stage gqa [--seeds ...]                                   T4 GQA conversion (BERT)
+     python src/model.py --stage joint [--models ...] [--seeds ...]                  B0 + exit heads trained jointly
+       (then: --stage exit --models bert_joint distilbert_joint --name t2_exit_joint)
 Per run writes checkpoints/<model>_s<seed>/ (best epoch by validation macro F1; gitignored)
 and results/b0/<model>_s<seed>.json (per-epoch validation metrics, timing) plus validation probabilities.
 test_clean is never touched here; it is scored once in the final stage.
@@ -54,14 +56,21 @@ def predict(model, data):
     return probs
 
 
-def train(key, seed, model=None, epochs=EPOCHS, tag=None, out_sub="b0"):
-    """Fine-tune `key` from the hub, or continue training a given `model` (T4 uptraining)."""
+def train(key, seed, model=None, epochs=EPOCHS, tag=None, out_sub="b0", joint=False):
+    """Fine-tune `key` from the hub, or continue training a given `model` (T4 uptraining).
+    joint=True also trains a linear exit head on [CLS] after every layer but the last, with the PABEE-style
+    loss sum_j j * CE_j / sum_j j (deeper layers weigh more; the last term is the model's own head)."""
     random.seed(seed)
     torch.manual_seed(seed)
     name = MODELS[key]
     tag = tag or f"{key}_s{seed}"
     tok = AutoTokenizer.from_pretrained(name)
     model = (model or AutoModelForSequenceClassification.from_pretrained(name, num_labels=2)).to(DEVICE)
+    ramps = None
+    if joint:
+        from bench import config_dims
+        L, d = config_dims(model.config)
+        ramps = torch.nn.ModuleList(torch.nn.Linear(d, 2) for _ in range(L - 1)).to(DEVICE)
 
     Xtr, ytr = load("train")
     Xva, yva = load("validation")
@@ -72,7 +81,7 @@ def train(key, seed, model=None, epochs=EPOCHS, tag=None, out_sub="b0"):
     groups = [
         {"params": [p for n, p in model.named_parameters() if not n.endswith(no_decay)], "weight_decay": WEIGHT_DECAY},
         {"params": [p for n, p in model.named_parameters() if n.endswith(no_decay)], "weight_decay": 0.0},
-    ]
+    ] + ([{"params": list(ramps.parameters()), "weight_decay": WEIGHT_DECAY}] if joint else [])
     opt = torch.optim.AdamW(groups, lr=LR)
     total = epochs * len(train_dl)
     warm = int(WARMUP * total)
@@ -87,8 +96,16 @@ def train(key, seed, model=None, epochs=EPOCHS, tag=None, out_sub="b0"):
         te = time.perf_counter()
         for batch in train_dl:
             batch = {k: v.to(DEVICE) for k, v in batch.items()}
-            model(**batch).loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            if joint:
+                out = model(**batch, output_hidden_states=True)
+                losses = [torch.nn.functional.cross_entropy(r(h[:, 0]), batch["labels"])
+                          for r, h in zip(ramps, out.hidden_states[1:-1])] + [out.loss]
+                w = torch.arange(1, len(losses) + 1, device=DEVICE, dtype=torch.float32)
+                ((w * torch.stack(losses)).sum() / w.sum()).backward()
+                torch.nn.utils.clip_grad_norm_(list(model.parameters()) + list(ramps.parameters()), 1.0)
+            else:
+                model(**batch).loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()
             sched.step()
             opt.zero_grad()
@@ -100,6 +117,9 @@ def train(key, seed, model=None, epochs=EPOCHS, tag=None, out_sub="b0"):
             best, best_probs = m, probs
             model.save_pretrained(out_dir)
             tok.save_pretrained(out_dir)
+            if joint:  # same (w, b) format as the T2 probes: P(attack) = sigmoid(h . w + b)
+                torch.save([((r.weight[1] - r.weight[0]).detach().float().cpu(), (r.bias[1] - r.bias[0]).detach().float().cpu())
+                            for r in ramps], out_dir / "exit_heads.pt")
 
     run = {"model": name, "seed": seed, "device": DEVICE, "hparams": {"lr": LR, "batch": BATCH, "epochs": epochs,
            "warmup": WARMUP, "weight_decay": WEIGHT_DECAY}, "history": history, "best": best,
@@ -215,12 +235,18 @@ def early_exit(keys, seeds, latency_seed=13, n_latency=500, f1_drop=0.005, name=
             Fva, full_probs = layer_cls(model, tok, Xva)
 
             heads, P, probe = [], [], []
+            saved = torch.load(path / "exit_heads.pt") if key.endswith("_joint") else None  # trained with the model
             for layer in range(L):
-                clf = LogisticRegression(max_iter=2000).fit(Ftr[layer].numpy(), ytr)
-                p = clf.predict_proba(Fva[layer].numpy())[:, 1]
+                if saved and layer < L - 1:
+                    w, b = saved[layer]
+                    p = torch.sigmoid(Fva[layer] @ w + b).numpy()
+                    heads.append((w, b))
+                else:
+                    clf = LogisticRegression(max_iter=2000).fit(Ftr[layer].numpy(), ytr)
+                    p = clf.predict_proba(Fva[layer].numpy())[:, 1]
+                    heads.append((torch.tensor(clf.coef_[0], dtype=torch.float32),
+                                  torch.tensor(clf.intercept_[0], dtype=torch.float32)))
                 probe.append(evaluate(yva, p) | {"layer": layer + 1})
-                heads.append((torch.tensor(clf.coef_[0], dtype=torch.float32),
-                              torch.tensor(clf.intercept_[0], dtype=torch.float32)))
                 P.append(torch.tensor(p, dtype=torch.float32))
             P[-1] = torch.tensor(full_probs)  # deepest exit = the model's own head, so "never exit" reproduces B0
             P = torch.stack(P)
@@ -531,7 +557,7 @@ def gqa(seeds, latency_seed=13, n_latency=500):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--stage", choices=["b0", "exit", "prune", "gqa"], default="b0")
+    ap.add_argument("--stage", choices=["b0", "joint", "exit", "prune", "gqa"], default="b0")
     ap.add_argument("--models", nargs="+", default=list(MODELS))
     ap.add_argument("--seeds", nargs="+", type=int, default=[13, 42, 2026])
     ap.add_argument("--name", default="t2_exit", help="exit stage output name (results/<name>.json/.png)")
@@ -542,6 +568,10 @@ if __name__ == "__main__":
         token_pruning(args.models, args.seeds)
     elif args.stage == "gqa":
         gqa(args.seeds)  # BERT only
+    elif args.stage == "joint":
+        for key in args.models:
+            for seed in args.seeds:
+                train(key, seed, tag=f"{key}_joint_s{seed}", out_sub="joint", joint=True)
     else:
         for key in args.models:
             for seed in args.seeds:

@@ -1,0 +1,51 @@
+{
+  "max_words": 8,
+  "explicit_pattern": "\\b(ignore|disregard|forget|override|bypass|jailbreak|pretend|dan|developer mode|previous instructions|system prompt|no restrictions|unrestricted)\\b",
+  "splits": {
+    "train": {
+      "attacks": 4781,
+      "short_attacks": 1622,
+      "short_implicit_attacks": 1275,
+      "short_implicit_share_of_attacks": 0.26668061075088895,
+      "short_implicit_benign": 3899
+    },
+    "validation": {
+      "attacks": 1051,
+      "short_attacks": 694,
+      "short_implicit_attacks": 638,
+      "short_implicit_share_of_attacks": 0.6070409134157945,
+      "short_implicit_benign": 855,
+      "recall_all_attacks": {
+        "tfidf": 0.9600380589914367,
+        "b0_seed_mean": 0.9679670155407549
+      },
+      "recall_short_implicit_attacks": {
+        "tfidf": 0.9420062695924765,
+        "b0_seed_mean": 0.9566353187042841
+      },
+      "recall_other_attacks": {
+        "tfidf": 0.9878934624697336,
+        "b0_seed_mean": 0.9854721549636803
+      }
+    },
+    "test_clean": {
+      "attacks": 942,
+      "short_attacks": 681,
+      "short_implicit_attacks": 635,
+      "short_implicit_share_of_attacks": 0.6740976645435244,
+      "short_implicit_benign": 922,
+      "recall_all_attacks": {
+        "tfidf": 0.9097664543524416,
+        "b0_seed_mean": 0.9065817409766455
+      },
+      "recall_short_implicit_attacks": {
+        "tfidf": 0.8724409448818897,
+        "b0_seed_mean": 0.8713910761154856
+      },
+      "recall_other_attacks": {
+        "tfidf": 0.9869706840390879,
+        "b0_seed_mean": 0.979370249728556
+      }
+    }
+  }
+}
